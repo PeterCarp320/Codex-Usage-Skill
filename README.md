@@ -1,53 +1,54 @@
 # Codex Usage skill
 
-This repository contains a portable Codex skill that reports:
+A portable Codex skill for checking your current Codex usage in a compact snapshot.
 
-- Current Codex rate-limit usage and reset times
+It reports:
+
+- Current rate-limit usage and reset time
 - Available reset credits and their expiry times
-- Online usage/profile statistics
-- Local usage metadata without network calls
-- Optional TXT, JSON, and CSV exports
+- Lifetime online token count and current usage streak
+- Dominant model from local Codex metadata
+- Optional detailed local, online, TXT, JSON, and CSV reports
 
-## Install with Codex
+## Install
 
-Copy the URL of the `codex-usage` folder in this repository, then ask Codex:
-
-```text
-Install the codex-usage skill from <GitHub folder URL>.
-```
-
-For a repository on the `main` branch, the folder URL has this form:
+Copy and paste this exact prompt into Codex:
 
 ```text
-https://github.com/OWNER/REPOSITORY/tree/main/codex-usage
+Install the codex-usage skill from https://github.com/PeterCarp320/codex-usage-skill/tree/main/codex-usage
 ```
 
-On the next turn, run:
+Codex installs the skill into its local skills directory. The skill is available on your next turn.
+
+## Run
+
+On your next turn, invoke the installed skill with:
 
 ```text
-/codex-usage
+$codex-usage
 ```
 
-The skill requires a current Codex Desktop or CLI login and Python 3.10 or newer. It does not require an OpenAI API key or third-party Python packages.
+Codex may display that text as a clickable skill chip. Custom skills are invoked with `$skill-name`; `/codex-usage` is not a supported custom-skill command.
+
+## Requirements
+
+- A current Codex Desktop or Codex CLI login
+- Python 3.10 or newer
+- No OpenAI API key
+- No third-party Python packages
 
 ## Privacy and security
 
 - Local-only reports make no network calls.
-- Online reports read the existing local Codex login and make read-only `GET` requests only to `https://chatgpt.com/backend-api`.
-- Access tokens, account identifiers, emails, prompts, responses, project paths, and absolute filesystem paths are not printed or stored.
-- Online usage endpoints are undocumented and may change. Their output is operational information, not official billing data.
-- Exported reports contain usage statistics. Review them before sharing.
+- Online reports use the existing local Codex login and make read-only `GET` requests only to `https://chatgpt.com/backend-api`.
+- Access tokens, account identifiers, emails, prompts, responses, project paths, absolute filesystem paths, and session identifiers are not printed or stored.
+- The online usage endpoints are undocumented and may change. Their output is operational information, not official billing data.
+- Exported reports contain usage statistics and should be reviewed before sharing.
 
-See `SECURITY.md` for the complete data-flow and security notes.
+See `SECURITY.md` for the complete data flow and security notes.
 
-## Short sharing prompt
+## License and attribution
 
-After publishing, replace the URL below with the public folder URL:
+The bundled command-line implementation is derived from [MacSteini/Codex-Usage](https://github.com/MacSteini/Codex-Usage) at commit [`c40350a`](https://github.com/MacSteini/Codex-Usage/commit/c40350a75e85c451d4edfa58fa2d0958c1ef25e2). The upstream project is licensed under the MIT License.
 
-```text
-Install this Codex usage skill from <GitHub folder URL>, then run /codex-usage.
-```
-
-## Attribution
-
-The bundled command-line implementation is derived from [MacSteini/Codex-Usage](https://github.com/MacSteini/Codex-Usage) at commit `c40350a75e85c451d4edfa58fa2d0958c1ef25e2` and is distributed under the MIT License. See `LICENSE` and `codex-usage/references/Codex-Usage-LICENCE.txt`.
+The MIT License permits use, copying, modification, publication, and distribution provided that the original copyright and permission notice are retained. This repository preserves that notice in `LICENSE` and `codex-usage/references/Codex-Usage-LICENCE.txt`. Modifications in this repository are released under the same MIT License.
