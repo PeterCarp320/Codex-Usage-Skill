@@ -22,10 +22,10 @@ For a repository on the `main` branch, the folder URL has this form:
 https://github.com/OWNER/REPOSITORY/tree/main/codex-usage
 ```
 
-On the next turn, ask:
+On the next turn, run:
 
 ```text
-Show my Codex usage.
+/codex-usage
 ```
 
 The skill requires a current Codex Desktop or CLI login and Python 3.10 or newer. It does not require an OpenAI API key or third-party Python packages.
@@ -45,7 +45,7 @@ See `SECURITY.md` for the complete data-flow and security notes.
 After publishing, replace the URL below with the public folder URL:
 
 ```text
-Install this Codex usage skill from <GitHub folder URL>, then show my usage.
+Install this Codex usage skill from <GitHub folder URL>, then run /codex-usage.
 ```
 
 ## Attribution
