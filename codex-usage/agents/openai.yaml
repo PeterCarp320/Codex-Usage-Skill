@@ -1,4 +1,4 @@
 interface:
   display_name: "Codex Usage"
   short_description: "Show local and online Codex usage reports"
-  default_prompt: "Use $codex-usage to show my compact Codex usage snapshot."
+  default_prompt: "$codex-usage"
