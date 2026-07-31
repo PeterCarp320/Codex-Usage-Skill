@@ -32,6 +32,7 @@ import sys
 import textwrap
 import unicodedata
 import urllib.error
+import urllib.parse
 import urllib.request
 from collections import Counter, defaultdict
 from datetime import datetime, timezone
@@ -343,6 +344,14 @@ def codex_home_label(codex_home: Path) -> str:
     return "$CODEX_HOME" if os.environ.get("CODEX_HOME") else "~/.codex"
 
 
+def auth_path_label(codex_home: Path) -> str:
+    return f"{codex_home_label(codex_home)}/auth.json"
+
+
+def export_path_label(path: Path) -> str:
+    return path.name
+
+
 def section(title: str) -> None:
     print(colour(title, "bold"))
     print("=" * display_width(title))
@@ -360,19 +369,21 @@ def explain(text: str) -> None:
 
 
 def load_auth() -> tuple[str, str]:
+    auth_label = auth_path_label(CODEX_HOME)
     if not AUTH_PATH.exists():
-        die(f"Codex auth file not found: {AUTH_PATH}")
+        die(f"Codex auth file not found: {auth_label}")
 
     try:
         auth = json.loads(AUTH_PATH.read_text(encoding="utf-8"))
     except json.JSONDecodeError as exc:
-        die(f"Could not parse {AUTH_PATH} as JSON: {exc}")
+        die(f"Could not parse {auth_label} as JSON: {exc}")
     except OSError as exc:
-        die(f"Could not read {AUTH_PATH}: {exc}")
+        detail = exc.strerror or type(exc).__name__
+        die(f"Could not read {auth_label}: {detail}")
 
     tokens = auth.get("tokens")
     if not isinstance(tokens, dict):
-        die(f"Unexpected format in {AUTH_PATH}: field 'tokens' is missing.")
+        die(f"Unexpected format in {auth_label}: field 'tokens' is missing.")
 
     access_token = tokens.get("access_token")
     account_id = tokens.get("account_id")
@@ -391,6 +402,33 @@ def build_url(path: str) -> str:
     return API_BASE.rstrip("/") + "/" + path.lstrip("/")
 
 
+class SameOriginRedirectHandler(urllib.request.HTTPRedirectHandler):
+    def redirect_request(
+        self,
+        req: urllib.request.Request,
+        fp: Any,
+        code: int,
+        msg: str,
+        headers: Any,
+        newurl: str,
+    ) -> urllib.request.Request | None:
+        allowed = urllib.parse.urlsplit(API_BASE)
+        target = urllib.parse.urlsplit(newurl)
+        if (
+            target.scheme != "https"
+            or target.hostname != allowed.hostname
+            or target.port != allowed.port
+        ):
+            raise urllib.error.HTTPError(
+                newurl,
+                code,
+                "Cross-origin redirect blocked",
+                headers,
+                fp,
+            )
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
 def fetch_json(
     path_or_url: str, access_token: str, account_id: str, timeout: int = 25
 ) -> dict[str, Any]:
@@ -404,8 +442,9 @@ def fetch_json(
             "User-Agent": USER_AGENT,
         },
     )
+    opener = urllib.request.build_opener(SameOriginRedirectHandler())
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as response:
+        with opener.open(req, timeout=timeout) as response:
             raw = response.read().decode("utf-8", "replace")
             status = response.status
     except urllib.error.HTTPError as exc:
@@ -426,7 +465,7 @@ def fetch_json(
             "ok": False,
             "status": status,
             "error": f"Response was not valid JSON: {exc}",
-            }
+        }
     return {"ok": True, "status": status, "data": data}
 
 
@@ -443,6 +482,191 @@ def redact(value: Any, key: str | None = None) -> Any:
             return text[:297] + "..."
         return text
     return value
+
+
+def allowlisted_window(value: Any) -> dict[str, int | float]:
+    if not isinstance(value, dict):
+        return {}
+    return {
+        key: value[key]
+        for key in ("used_percent", "reset_after_seconds", "reset_at")
+        if isinstance(value.get(key), (int, float))
+        and not isinstance(value.get(key), bool)
+    }
+
+
+def allowlisted_rate_limit(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        return {}
+    out: dict[str, Any] = {
+        key: value[key]
+        for key in ("allowed", "limit_reached")
+        if isinstance(value.get(key), bool)
+    }
+    for key in ("primary_window", "secondary_window"):
+        window = allowlisted_window(value.get(key))
+        if window:
+            out[key] = window
+    return out
+
+
+def allowlisted_online_data(name: str, data: Any) -> dict[str, Any]:
+    if not isinstance(data, dict):
+        return {}
+    if name == "profile":
+        stats = data.get("stats")
+        if not isinstance(stats, dict):
+            return {}
+        allowed_stats = {
+            key: stats[key]
+            for key in (
+                "lifetime_tokens",
+                "peak_daily_tokens",
+                "current_streak_days",
+                "longest_streak_days",
+                "total_threads",
+                "fast_mode_usage_percentage",
+                "most_used_reasoning_effort_percentage",
+            )
+            if isinstance(stats.get(key), (int, float))
+            and not isinstance(stats.get(key), bool)
+        }
+        if isinstance(stats.get("most_used_reasoning_effort"), str):
+            allowed_stats["most_used_reasoning_effort"] = stats[
+                "most_used_reasoning_effort"
+            ]
+        buckets = stats.get("daily_usage_buckets")
+        if isinstance(buckets, list):
+            allowed_stats["daily_usage_buckets"] = [
+                {
+                    key: bucket[key]
+                    for key in ("start_date", "tokens")
+                    if key in bucket
+                    and (
+                        isinstance(bucket[key], str)
+                        if key == "start_date"
+                        else isinstance(bucket[key], (int, float))
+                        and not isinstance(bucket[key], bool)
+                    )
+                }
+                for bucket in buckets
+                if isinstance(bucket, dict)
+            ]
+        return {"stats": allowed_stats}
+    if name == "rate_limit_status":
+        out: dict[str, Any] = {}
+        for key in ("plan_type", "rate_limit_reached_type"):
+            if isinstance(data.get(key), str):
+                out[key] = data[key]
+        rate_limit = allowlisted_rate_limit(data.get("rate_limit"))
+        if rate_limit:
+            out["rate_limit"] = rate_limit
+        credits = data.get("credits")
+        if isinstance(credits, dict):
+            safe_credits: dict[str, Any] = {}
+            balance = credits.get("balance")
+            if isinstance(balance, (int, float)) and not isinstance(balance, bool):
+                safe_credits["balance"] = balance
+            for key in (
+                "has_credits",
+                "unlimited",
+                "overage_limit_reached",
+            ):
+                if isinstance(credits.get(key), bool):
+                    safe_credits[key] = credits[key]
+            if safe_credits:
+                out["credits"] = safe_credits
+        additional = data.get("additional_rate_limits")
+        if isinstance(additional, list):
+            safe_additional = []
+            for entry in additional:
+                if not isinstance(entry, dict):
+                    continue
+                safe_entry: dict[str, Any] = {}
+                for key in ("limit_name", "metered_feature"):
+                    if isinstance(entry.get(key), str):
+                        safe_entry[key] = entry[key]
+                entry_rate_limit = allowlisted_rate_limit(entry.get("rate_limit"))
+                if entry_rate_limit:
+                    safe_entry["rate_limit"] = entry_rate_limit
+                safe_additional.append(safe_entry)
+            out["additional_rate_limits"] = safe_additional
+        return out
+    if name == "daily_token_usage_breakdown":
+        out: dict[str, Any] = {}
+        for key in ("units", "group_by"):
+            if isinstance(data.get(key), str):
+                out[key] = data[key]
+        points = data.get("data")
+        if isinstance(points, list):
+            safe_points = []
+            for point in points:
+                if not isinstance(point, dict):
+                    continue
+                safe_point: dict[str, Any] = {}
+                for key in ("date", "start_date", "bucket_start_date"):
+                    if isinstance(point.get(key), str):
+                        safe_point[key] = point[key]
+                for key in ("credits", "total", "total_credits"):
+                    if isinstance(point.get(key), (int, float)) and not isinstance(
+                        point.get(key), bool
+                    ):
+                        safe_point[key] = point[key]
+                surfaces = point.get("product_surface_usage_values")
+                if isinstance(surfaces, dict):
+                    safe_point["product_surface_usage_values"] = {
+                        str(key): value
+                        for key, value in surfaces.items()
+                        if isinstance(value, (int, float))
+                        and not isinstance(value, bool)
+                    }
+                models = point.get("models")
+                if isinstance(models, list):
+                    safe_models = []
+                    for model in models:
+                        if not isinstance(model, dict):
+                            continue
+                        safe_model: dict[str, Any] = {}
+                        for key in ("model", "speed"):
+                            if isinstance(model.get(key), str):
+                                safe_model[key] = model[key]
+                        credits = model.get("credits")
+                        if isinstance(credits, (int, float)) and not isinstance(
+                            credits, bool
+                        ):
+                            safe_model["credits"] = credits
+                        safe_models.append(safe_model)
+                    safe_point["models"] = safe_models
+                safe_points.append(safe_point)
+            out["data"] = safe_points
+        return out
+    if name == "credit_usage_events":
+        events = data.get("data")
+        if not isinstance(events, list):
+            return {"data": []}
+        safe_events = []
+        for event in events:
+            if not isinstance(event, dict):
+                continue
+            safe_event: dict[str, Any] = {}
+            for key in (
+                "created_at",
+                "timestamp",
+                "date",
+                "start_date",
+                "type",
+                "event_type",
+            ):
+                if isinstance(event.get(key), str):
+                    safe_event[key] = event[key]
+            for key in ("credits", "amount", "delta"):
+                if isinstance(event.get(key), (int, float)) and not isinstance(
+                    event.get(key), bool
+                ):
+                    safe_event[key] = event[key]
+            safe_events.append(safe_event)
+        return {"data": safe_events}
+    return {}
 
 
 def collect_resets() -> dict[str, Any]:
@@ -572,7 +796,7 @@ def print_resets(reset_data: dict[str, Any], warn_days: int = 7) -> None:
         [
             ["Endpoint", "/backend-api/wham/rate-limit-reset-credits"],
             ["Method", "GET"],
-            ["Auth file", f"{AUTH_PATH} (token is not printed)"],
+            ["Auth file", f"{auth_path_label(CODEX_HOME)} (token is not printed)"],
             ["Endpoint status", "undocumented; may change"],
         ],
     )
@@ -825,7 +1049,7 @@ def scan_sessions_metadata(codex_home: Path, top_n: int = 10) -> dict[str, Any]:
 
 def collect_local_usage(codex_home: Path, top_n: int) -> dict[str, Any]:
     if not codex_home.exists():
-        die(f"Codex home not found: {codex_home}")
+        die(f"Codex home not found: {codex_home_label(codex_home)}")
     return {
         "retrieved_at_local": local_now_text(),
         "codex_home": codex_home_label(codex_home),
@@ -1103,7 +1327,7 @@ def collect_online_usage() -> dict[str, Any]:
         "retrieved_at_local": local_now_text(),
         "network_calls_made": 0,
         "endpoints": {},
-        "privacy_note": "Responses are redacted before display/export. Only read-only GET endpoints are used.",
+        "privacy_note": "Only allowlisted usage fields reach display/export. Only read-only GET endpoints are used.",
     }
     for name, path in ONLINE_ENDPOINTS.items():
         response = fetch_json(path, access_token, account_id)
@@ -1113,7 +1337,7 @@ def collect_online_usage() -> dict[str, Any]:
                 "path": path,
                 "ok": True,
                 "status": response.get("status"),
-                "data": redact(response.get("data")),
+                "data": allowlisted_online_data(name, response.get("data")),
             }
         else:
             out["endpoints"][name] = {
@@ -1612,32 +1836,20 @@ def print_credit_events_tables(
                 scalar_preview(
                     event.get("type")
                     or event.get("event_type")
-                    or event.get("reason")
                     or "-"
                 ),
                 fmt_number(
                     event.get("credits") or event.get("amount") or event.get("delta")
                 ),
-                scalar_preview(
-                    event.get("description")
-                    or event.get("title")
-                    or event.get("message")
-                    or "-"
-                ),
             ]
         )
-    print_counter_table(
-        "Credit usage events", ["Date", "Event", "Credits", "Description"], rows
-    )
+    print_counter_table("Credit usage events", ["Date", "Event", "Credits"], rows)
 
 
 def print_profile_tables(
     item: dict[str, Any], data_obj: dict[str, Any], top: int
 ) -> None:
     stats = data_obj.get("stats") if isinstance(data_obj.get("stats"), dict) else {}
-    profile = (
-        data_obj.get("profile") if isinstance(data_obj.get("profile"), dict) else {}
-    )
     rows = [
         ["Lifetime tokens", fmt_int(stats.get("lifetime_tokens"))],
         ["Peak daily tokens", fmt_int(stats.get("peak_daily_tokens"))],
@@ -1662,7 +1874,6 @@ def print_profile_tables(
             )
             else "-",
         ],
-        ["Profile fields present", ", ".join(list(profile.keys())[:8]) or "-"],
     ]
     print_counter_table("Profile statistics", ["Metric", "Value"], rows)
 
@@ -1740,14 +1951,14 @@ def print_technical_endpoint_details(name: str, item: dict[str, Any], top: int) 
         endpoint_overview_rows(name, item, data_obj),
     )
     rows = [[path, value] for path, value in flatten_interesting(data_obj, limit=top)]
-    print_counter_table("Filtered raw fields", ["Field", "Value"], rows)
+    print_counter_table("Allowlisted fields", ["Field", "Value"], rows)
 
 
 def print_online_technical_details(data: dict[str, Any], top: int) -> None:
     print(colour("Technical details", "bold"))
     print("-" * 17)
     explain(
-        "These details are kept at the bottom for transparency. They show endpoint paths, response shapes, and a small filtered sample of raw usage-like fields; they are not the primary user-facing report."
+        "These details are kept at the bottom for transparency. They show endpoint paths, response shapes, and a small sample of allowlisted usage fields; they are not the primary user-facing report."
     )
     for name, item in data.get("endpoints", {}).items():
         print_technical_endpoint_details(name, item, top)
@@ -1842,7 +2053,7 @@ def print_online_usage(data: dict[str, Any], top: int = 30) -> None:
             ["Retrieved", data.get("retrieved_at_local")],
             ["Network calls made", data.get("network_calls_made")],
             ["Methods", "GET only"],
-            ["Privacy", "responses redacted before display/export"],
+            ["Privacy", "allowlisted usage fields only"],
         ],
     )
 
@@ -1856,7 +2067,7 @@ def print_online_usage(data: dict[str, Any], top: int = 30) -> None:
     print_interpreted_online_summary(data)
 
     explain(
-        "The endpoint sections below use readable labels first. Technical endpoint paths and filtered raw fields are collected later under Technical details."
+        "The endpoint sections below use readable labels first. Technical endpoint paths and allowlisted fields are collected later under Technical details."
     )
 
     for name, item in data.get("endpoints", {}).items():
@@ -1980,13 +2191,23 @@ def rows_for_csv(report: str, data: Any, top: int = 200) -> list[dict[str, Any]]
     return rows
 
 
+def open_secure_text(path: Path, newline: str | None = None) -> Any:
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+    fd = os.open(path, flags, 0o600)
+    try:
+        return os.fdopen(fd, "w", encoding="utf-8", newline=newline)
+    except Exception:
+        os.close(fd)
+        raise
+
+
 def write_csv(path: Path, rows: list[dict[str, Any]]) -> None:
     keys: list[str] = []
     for row in rows:
         for key in row:
             if key not in keys:
                 keys.append(key)
-    with path.open("x", encoding="utf-8", newline="") as handle:
+    with open_secure_text(path, newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=keys or ["section"])
         writer.writeheader()
         writer.writerows(rows)
@@ -2006,7 +2227,7 @@ def export_report(report: str, fmt: str, top: int, days: int, warn_days: int) ->
     path = export_path(report, fmt)
     if fmt == "json":
         data = export_json(report, top, days)
-        with path.open("x", encoding="utf-8") as handle:
+        with open_secure_text(path) as handle:
             handle.write(json.dumps(data, indent=2, ensure_ascii=False))
             handle.write("\n")
     elif fmt == "csv":
@@ -2023,7 +2244,7 @@ def export_report(report: str, fmt: str, top: int, days: int, warn_days: int) ->
             "online-usage": cmd_online_usage,
         }
         text = render_text(funcs[report], args)
-        with path.open("x", encoding="utf-8") as handle:
+        with open_secure_text(path) as handle:
             handle.write(text)
     else:
         die(f"Unsupported export format: {fmt}")
@@ -2033,7 +2254,7 @@ def export_report(report: str, fmt: str, top: int, days: int, warn_days: int) ->
 def cmd_export(args: argparse.Namespace) -> None:
     set_colour_mode(getattr(args, "colour", None))
     path = export_report(args.report, args.format, args.top, args.days, args.warn_days)
-    print(f"Exported {args.report} report to: {path}")
+    print(f"Exported {args.report} report: {export_path_label(path)}")
 
 
 def menu_clear() -> None:
@@ -2221,7 +2442,7 @@ def cmd_menu(args: argparse.Namespace) -> None:
                 quick_summary_error = None
                 continue
             path = export_report(report, fmt, top, days, warn_days)
-            print(f"Exported to: {path}")
+            print(f"Exported: {export_path_label(path)}")
             quick_summary = None
             quick_summary_error = None
             continue

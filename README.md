@@ -41,7 +41,9 @@ Codex may display that text as a clickable skill chip. Custom skills are invoked
 
 - Local-only reports make no network calls.
 - Online reports use the existing local Codex login and make read-only `GET` requests only to `https://chatgpt.com/backend-api`.
-- Access tokens, account identifiers, emails, prompts, responses, project paths, absolute filesystem paths, and session identifiers are not printed or stored.
+- Authenticated redirects are accepted only when they remain on the same HTTPS origin; cross-origin redirects are blocked.
+- Only explicitly allowlisted usage fields reach output or exports. Access tokens, account identifiers, identity fields, emails, prompts, responses, free-text event descriptions, project paths, absolute filesystem paths, and session identifiers are not printed or stored.
+- New exports are created with owner-only `0600` permissions.
 - The online usage endpoints are undocumented and may change. Their output is operational information, not official billing data.
 - Exported reports contain usage statistics and should be reviewed before sharing.
 

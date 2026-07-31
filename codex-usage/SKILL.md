@@ -34,7 +34,8 @@ python3 "<skill-root>/scripts/codex_usage.py" all --no-colour
 - Read Codex state from `$CODEX_HOME` when set, otherwise from `~/.codex`.
 - Treat `local-usage` as network-free. Do not print prompts, responses, project paths, absolute filesystem paths, or authentication data.
 - Treat `resets`, `online-usage`, and `all` as online modes. They read the current local Codex login and make read-only `GET` requests only to `https://chatgpt.com/backend-api`.
-- Never print, persist, or expose the access token or account identifier.
+- Allow only endpoint-specific usage fields into output or exports. Never print, persist, or expose access tokens, account identifiers, identity fields, unstructured event text, or absolute filesystem paths.
+- Block authenticated redirects that leave the exact HTTPS origin, and create new exports with owner-only `0600` permissions.
 - Treat online data as operational information, not official billing data. The endpoints are undocumented and may change.
 - If the local login is missing, expired, or malformed, explain that Codex needs a current local login and offer the local-only report.
 
